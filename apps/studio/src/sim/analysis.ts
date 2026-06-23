@@ -3,7 +3,7 @@
  * 只在外層做「手動玩碰不到」的彙總：強制觸發、機制結果分佈、觸發間距、極端值、不變式。
  */
 import {
-  buildSampler, spinOnce, bucketIndex, BUCKET_LABELS, BET,
+  buildSampler, spinOnce, bucketIndex, BUCKET_LABELS, BET, taxonomyEntry,
   type GameDefinition, type Rng, type SpinResult,
 } from "@slot/engine";
 
@@ -152,24 +152,42 @@ export function forceTrigger(game: GameDefinition, rng: Rng, maxTries = 500000):
   return { found: false, tries: maxTries, result: null };
 }
 
-/** 逐遊戲測試建議：讀 game 定義，產出「這個遊戲該怎麼測」的清單。 */
+/**
+ * 逐遊戲測試建議：讀 game 定義 + taxonomy 目錄，依三軸（贏分方式 / 玩法模式 / 遊戲機制）
+ * 產出「這個遊戲該怎麼測」清單；每個分類條目自動帶入目錄的「怎麼測」指標（連動分類體系）。
+ */
 export function recommendTests(game: GameDefinition): string[] {
   const recs: string[] = [];
-  recs.push("基本盤：RTP 收斂曲線、波動 SD、中獎率 / 空轉率（→ 數值實驗室）。");
-  recs.push("不變式：贏分 ≥ 0、無 NaN/∞、total = base + feature、機制只在達門檻時計分。");
+  recs.push("【基本】RTP 收斂曲線、波動 SD、中獎率 / 空轉率（→ 數值實驗室）。");
+  recs.push("【不變式】贏分 ≥ 0、無 NaN/∞、total = base + feature、機制只在達門檻時計分。");
+
+  // 贏分方式（pay 軸）
+  const pay = taxonomyEntry(game.payMechanic ?? "ways");
+  if (pay) recs.push(`【贏分方式·${pay.nameZH}】${pay.howToTest}`);
+
+  // 玩法模式 / 遊戲機制（features）— 保留逐型別具體建議，再補目錄的指標參考。
   for (const f of game.features) {
+    const axisLabel = f.category === "mechanic" ? "遊戲機制" : "玩法模式";
     if (f.type === "freeSpins") {
-      recs.push(`免費遊戲「${f.label}」：retrigger 鏈長分佈（會不會過長/失控）、平均免費局數、倍率 ×${f.params.multiplier ?? "?"} 對 RTP 的占比。`);
+      recs.push(`【${axisLabel}·${f.label}】retrigger 鏈長分佈（會不會過長/失控）、平均免費局數、倍率 ×${f.params.multiplier ?? "?"} 對 RTP 的占比。`);
     } else if (f.type === "holdAndSpin") {
-      recs.push(`Hold & Spin「${f.label}」：填滿盤面率（fullScreenBonus 對 RTP 占比）、觸發後金幣數分佈、重抽輪數、最大贏分來自哪種組合。`);
+      recs.push(`【${axisLabel}·${f.label}】填滿盤面率（fullScreenBonus 對 RTP 占比）、觸發後金幣數分佈、重抽輪數、最大贏分來自哪種組合。`);
     } else {
-      recs.push(`機制「${f.label}」(${f.type})：觸發率、贏分分佈、最大值與邊界行為。`);
+      recs.push(`【${axisLabel}·${f.label}】(${f.type}) 觸發率、贏分分佈、最大值與邊界行為。`);
     }
-    if (f.params && f.params.retrigger) recs.push(`「${f.label}」可再觸發 → 特別測最長鏈與是否可能無限增長（已有 guard 上限要驗）。`);
+    const tk = f.taxonomyKey ? taxonomyEntry(f.taxonomyKey) : undefined;
+    if (tk) recs.push(`　↳ 指標參考（${tk.nameEN}）：${tk.howToTest}`);
+    if (f.params && f.params.retrigger) recs.push(`　↳「${f.label}」可再觸發 → 特別測最長鏈與是否可能無限增長（已有 guard 上限要驗）。`);
   }
-  if (game.cascade) recs.push(`連消（cascade）：連鎖鏈長分佈與最長連鎖、倍率階梯 ${game.cascade.multipliers.join("→")} 對 RTP 的放大幅度、是否有過長連鎖造成失控大獎。`);
-  const featHeavy = game.features.length > 0;
-  if (featHeavy) recs.push("觸發間距：玩家最久要空轉幾局才進 bonus（影響體感與留存）。");
-  recs.push("極端值：找出最大單局贏分與其稀有度；目前未設封頂（win cap）→ 確認大獎不會失控。");
+
+  // 純機制（game.mechanics，未以 feature 實作者，如 cascade）
+  for (const k of game.mechanics ?? []) {
+    const e = taxonomyEntry(k);
+    if (e) recs.push(`【遊戲機制·${e.nameZH}】${e.howToTest}`);
+  }
+  if (game.cascade) recs.push(`【連消】連鎖鏈長分佈與最長連鎖、倍率階梯 ${game.cascade.multipliers.join("→")} 對 RTP 的放大幅度、是否有過長連鎖造成失控大獎。`);
+
+  if (game.features.length > 0) recs.push("【體感】觸發間距：玩家最久要空轉幾局才進 bonus（影響體感與留存）。");
+  recs.push("【極端值】最大單局贏分與其稀有度；目前未設封頂（win cap）→ 確認大獎不會失控。");
   return recs;
 }

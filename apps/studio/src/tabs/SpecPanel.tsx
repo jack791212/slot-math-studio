@@ -3,6 +3,7 @@ import { Check, Download, FileText, Puzzle } from "lucide-react";
 import type { GameDefinition } from "@slot/engine";
 import { C, MONO, pct } from "../theme";
 import { SecTitle, Field, Mini, ChkAuto, ChkMan } from "../ui";
+import { ClassificationBreakdown, TaxonomyCatalog, classificationMarkdown, gameClassification } from "../classification";
 import type { RichSimResult } from "../sim/types";
 
 interface Props {
@@ -33,6 +34,7 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
     const L: (string | null)[] = [];
     L.push(`# ${game.name}`, `> ${game.tagline}`, ``);
     L.push(`## 核心描述`, `- 期待點：${game.expectation}`, `- 目標客群：${game.audience}`, `- 波動定位：${game.volatilityTarget}`, `- RTP 目標：${game.rtpTarget}% ± ${game.rtpTolerance}%`, `- 規格：${game.layout.reels}×${game.layout.rows} · ${game.layout.model} · 權重+RNG`, ``);
+    L.push(classificationMarkdown(game), ``);
     L.push(`## 數值總表（模擬 ${(res.spins / 1000).toFixed(0)}k 局）`,
       `- RTP：${rtpPct.toFixed(2)}%（95% CI ±${ciHalf.toFixed(2)}%）`,
       `- 主遊戲 / 免費遊戲：${pct(res.rtpBase)} / ${pct(res.rtpFeat)}（feature 佔 ${featShare.toFixed(1)}%）`,
@@ -43,7 +45,7 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
     L.push(`## 機制子規格`);
     game.features.forEach((f) => {
       const rc = res.perFeature[f.id] !== undefined ? (res.perFeature[f.id] * 100).toFixed(2) + "%" : "—";
-      L.push(`### ${f.label}（${f.type}）`, `- 觸發條件：${f.trigger}`, `- 觸發率：1 / ${res.triggerOneIn.toFixed(0)}`, `- 對 RTP 貢獻：${rc}`,
+      L.push(`### ${f.label}（${f.category === "mechanic" ? "遊戲機制" : "玩法模式"}・${f.type}）`, `- 觸發條件：${f.trigger}`, `- 觸發率：1 / ${res.triggerOneIn.toFixed(0)}`, `- 對 RTP 貢獻：${rc}`,
         f.params.multiplier ? `- 倍率：×${f.params.multiplier}` : null,
         f.params.retrigger !== undefined ? `- 可再觸發：${f.params.retrigger ? "是" : "否"}` : null,
         f.type === "holdAndSpin" ? `- 重抽次數：${f.params.respins}　重抽落幣機率：${f.params.respinCoinChance}` : null,
@@ -54,6 +56,9 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
     L.push(`## 驗證`, `- [${inBand ? "x" : " "}] RTP 落在目標 ± 容差`, `- [${sampleOk ? "x" : " "}] 樣本足以在容差內定案（否則需 RD 大樣本）`, `- [${featuresHaveMetrics ? "x" : " "}] 每個機制都有子規格數值`, `- [${manual.vol ? "x" : " "}] 波動定位與體感一致`, `- [${manual.tail ? "x" : " "}] 倍數分佈尾端符合預期`, `- [${manual.hit ? "x" : " "}] 中獎率 / 空轉節奏 OK`, `- [${manual.psych ? "x" : " "}] 已做心理層 / 合規鉤子檢查（另立檢核）`);
     return L.filter((x) => x !== null).join("\n");
   }, [game, res, rtpPct, ciHalf, featShare, inBand, sampleOk, featuresHaveMetrics, manual]);
+
+  const cls = gameClassification(game);
+  const catalogKeys = [cls.pay?.key, ...cls.modes.map((m) => m.entry?.key), ...cls.mechanics.map((m) => m.key)].filter(Boolean) as string[];
 
   const copy = (text: string, tag: string) => { try { navigator.clipboard?.writeText(text); } catch { /* clipboard 不可用時忽略 */ } setCopied(tag); setTimeout(() => setCopied(""), 1500); };
   const loadJson = () => {
@@ -85,6 +90,11 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
           </div>
 
           <div className="rounded-xl p-4" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+            <SecTitle>玩法分類 <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}>· 三軸：贏分方式／玩法模式／遊戲機制</span></SecTitle>
+            <ClassificationBreakdown game={game} />
+          </div>
+
+          <div className="rounded-xl p-4" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
             <SecTitle>數值總表 <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}>· 自動帶入（模擬 {(res.spins / 1000).toFixed(0)}k）</span></SecTitle>
             <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
               <Mini label="RTP" value={rtpPct.toFixed(2) + "%"} sub={`目標 ${game.rtpTarget}±${game.rtpTolerance}`} ok={inBand} accent={C.value} />
@@ -101,8 +111,9 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
             {game.features.map((f) => (
               <div key={f.id} className="rounded-lg p-3" style={{ background: C.panel2, border: `1px solid ${C.line}`, marginBottom: 8 }}>
                 <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
-                  <Puzzle size={14} color={C.purple} /><span style={{ fontWeight: 800, fontSize: 14 }}>{f.label}</span>
+                  <Puzzle size={14} color={f.category === "mechanic" ? C.purple : C.gold} /><span style={{ fontWeight: 800, fontSize: 14 }}>{f.label}</span>
                   <span style={{ color: C.faint, fontSize: 11, fontFamily: MONO }}>type: {f.type}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: f.category === "mechanic" ? C.purple : C.gold, border: `1px solid ${(f.category === "mechanic" ? C.purple : C.gold)}55`, borderRadius: 4, padding: "0 6px" }}>{f.category === "mechanic" ? "遊戲機制" : "玩法模式"}</span>
                 </div>
                 <div className="grid" style={{ gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 6 }}>
                   <Mini label="觸發" value={f.trigger} small />
@@ -148,6 +159,9 @@ export function SpecPanel({ game, setGame, res, goLab }: Props) {
             <button onClick={loadJson} disabled={!jsonIn.trim()} className="rounded-lg" style={{ width: "100%", marginTop: 6, padding: 7, fontSize: 12, fontWeight: 700, cursor: jsonIn.trim() ? "pointer" : "default", border: `1px solid ${C.line}`, background: "transparent", color: jsonIn.trim() ? C.teal : C.faint }}>匯入並套用</button>
           </div>
         </div>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <TaxonomyCatalog highlightKeys={catalogKeys} />
       </div>
     </div>
   );

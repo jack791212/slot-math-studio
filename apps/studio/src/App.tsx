@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Play, FlaskConical, FileText } from "lucide-react";
-import { DEFAULT_GAME, GAMES, type GameDefinition } from "@slot/engine";
+import { DEFAULT_GAME, GAMES, taxonomyEntry, type GameDefinition } from "@slot/engine";
 import { C, MONO } from "./theme";
+import { AxisTags } from "./classification";
 import { useSimulation } from "./sim/useSimulation";
 import { PlayPanel } from "./tabs/PlayPanel";
 import { LabPanel } from "./tabs/LabPanel";
@@ -30,6 +31,13 @@ export default function App() {
     ["spec", "規格書", FileText],
   ];
 
+  // 遊戲切換器依「贏分方式」分組（同一贏分方式的遊戲歸一個 optgroup）。
+  const grouped = GAMES.reduce<Record<string, GameDefinition[]>>((acc, g) => {
+    const pm = g.payMechanic ?? "ways";
+    (acc[pm] ||= []).push(g);
+    return acc;
+  }, {});
+
   return (
     <div style={{ background: C.ink, color: C.text, minHeight: "100%", fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
       <div style={{ maxWidth: 1060, margin: "0 auto", padding: "20px 16px 48px" }}>
@@ -39,12 +47,17 @@ export default function App() {
               <span style={{ color: C.gold, fontSize: 11, letterSpacing: ".18em", fontWeight: 700, textTransform: "uppercase" }}>數值設計工作站 · v2</span>
               <select value={game.id} onChange={(e) => switchGame(e.target.value)}
                 style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontFamily: MONO, cursor: "pointer" }}>
-                {GAMES.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                {Object.entries(grouped).map(([pm, gs]) => (
+                  <optgroup key={pm} label={`贏分方式 · ${taxonomyEntry(pm)?.nameZH ?? pm}`}>
+                    {gs.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </optgroup>
+                ))}
               </select>
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, marginTop: 2 }}>
-              {game.name} <span style={{ color: C.dim, fontWeight: 600, fontSize: 18 }}>· {game.layout.model} · 權重+RNG</span>
+              {game.name} <span style={{ color: C.dim, fontWeight: 600, fontSize: 15 }}>· {game.layout.reels}×{game.layout.rows} · 權重+RNG</span>
             </div>
+            <div style={{ marginTop: 7 }}><AxisTags game={game} /></div>
           </div>
           <div className="flex" style={{ gap: 6, background: C.panel, padding: 4, borderRadius: 10, border: `1px solid ${C.line}` }}>
             {tabs.map(([id, lbl, Icon]) => (

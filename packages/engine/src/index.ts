@@ -23,6 +23,8 @@
  * 沒有更動任何運算、符號順序或 simulate 的內容；§6 黃金測試守住數值不變。
  */
 
+export * from "./taxonomy";
+
 export type Rng = () => number; // 回傳 [0,1)
 export type Board = string[][]; // board[reel][row]
 export type Sampler = () => string;
@@ -38,6 +40,10 @@ export interface FeatureDef {
   triggerSymbol?: string | string[];
   /** 觸發門檻（盤面上 triggerSymbol 的數量需 ≥ 此值）。預設 = 3。 */
   triggerMin?: number;
+  /** 三軸分類：此 feature 屬「玩法模式 mode」或「遊戲機制 mechanic」（給 UI 分區與規格書用）。 */
+  category?: "mode" | "mechanic";
+  /** 對應 taxonomy 目錄的 key（分類百科交叉引用，如 "freeSpins" / "holdAndSpin" / "stickyWild"）。 */
+  taxonomyKey?: string;
 }
 
 export interface GameDefinition {
@@ -59,6 +65,10 @@ export interface GameDefinition {
   features: FeatureDef[];
   /** 連消（cascade / avalanche）：有設定就啟用，base 改為連消結算。multipliers = 連續第 n 次連消的倍率（超過陣列長度沿用最後一個）。 */
   cascade?: { multipliers: number[] };
+  /** 贏分方式（taxonomy「pay」軸的 key，如 "ways" / "cluster" / "scatterPays"）。未設 = "ways"（既有行為，守黃金值）。 */
+  payMechanic?: string;
+  /** 此遊戲用到、但未以 feature handler 實作的「遊戲機制」（taxonomy「mechanic」軸 key，如 "cascade"），供分類顯示。 */
+  mechanics?: string[];
 }
 
 export interface SimResult {
@@ -192,6 +202,18 @@ export function cascadeBase(initial: Board, game: GameDefinition, sampler: Sampl
   }
   return { win: total, steps: step };
 }
+
+/** 贏分方式單次結算結果（給 PAY_MECHANICS 用）。cells = 中獎格座標（試玩高亮 / cascade 用）。 */
+export interface PayResult { win: number; steps: number; cells?: Set<string> }
+
+/**
+ * 贏分方式（pay mechanic）登錄表 — base 如何結算的「另一條擴充軸」（與 cascade 同層級）。
+ * 簽名：(board, game, sampler) => { win, steps, cells? }
+ *   - "ways"（預設 / 未設 payMechanic）不在此表：走既有 evalWays / cascade 路徑（守黃金值，不可動）。
+ *   - 新贏分方式（cluster 集合連爆 / scatterPays 分散連爆 …）在此註冊一個 key，並在 game.payMechanic 指定。
+ *   - steps = 連消 / 連鎖次數（無則 0），供測試工具收集 cascadeSteps。
+ */
+export const PAY_MECHANICS: Record<string, (board: Board, game: GameDefinition, sampler: Sampler) => PayResult> = {};
 
 /**
  * 機制模組登錄表。新增機制 = 在這裡註冊一個 type。
@@ -350,9 +372,12 @@ export interface SpinResult {
 
 export function spinOnce(sampler: Sampler, game: GameDefinition, rng: Rng): SpinResult {
   const b = drawBoard(sampler, game);
-  // base 結算：有 cascade 走連消，否則一般 243 ways。
+  // base 結算：① payMechanic 為非 "ways" 且已註冊 → 走該贏分方式；② 否則有 cascade 走連消；③ 否則一般 243 ways。
+  // （既有 6 個遊戲皆 payMechanic="ways" → 落在 ②/③，與改動前完全一致，守黃金值。）
   let base: number, cascadeSteps = 0;
-  if (game.cascade) { const cas = cascadeBase(b, game, sampler); base = cas.win; cascadeSteps = cas.steps; }
+  const pm = game.payMechanic;
+  if (pm && pm !== "ways" && PAY_MECHANICS[pm]) { const r = PAY_MECHANICS[pm](b, game, sampler); base = r.win; cascadeSteps = r.steps; }
+  else if (game.cascade) { const cas = cascadeBase(b, game, sampler); base = cas.win; cascadeSteps = cas.steps; }
   else base = evalWays(b, game);
   let feature = 0;
   const perFeature: Record<string, number> = {};
@@ -434,6 +459,7 @@ export const DEFAULT_GAME: GameDefinition = {
   rtpTarget: 95.0,
   rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways" },
+  payMechanic: "ways",
   symbols: ["WILD", "SCAT", "H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -446,6 +472,7 @@ export const DEFAULT_GAME: GameDefinition = {
   features: [
     {
       id: "freeGames", type: "freeSpins", label: "免費遊戲",
+      category: "mode", taxonomyKey: "freeSpins",
       trigger: "盤面 3+ 散佈", desc: "贈送免費局並對所有贏分套用固定倍率，期間 3+ 散佈可再觸發。",
       params: { award: { 3: 10, 4: 15, 5: 25 }, multiplier: 8, retrigger: true },
     },
@@ -467,6 +494,7 @@ export const HOLD_SPIN_GAME: GameDefinition = {
   rtpTarget: 95.0,
   rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways + Hold&Spin" },
+  payMechanic: "ways",
   symbols: ["WILD", "H1", "H2", "H3", "L1", "L2", "L3", "L4", "C1", "C2", "C5", "CT", "CG"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -479,6 +507,7 @@ export const HOLD_SPIN_GAME: GameDefinition = {
   features: [
     {
       id: "holdSpin", type: "holdAndSpin", label: "Hold & Spin（金幣鎖定）",
+      category: "mode", taxonomyKey: "holdAndSpin",
       trigger: "盤面 6+ 金幣",
       triggerSymbol: ["C1", "C2", "C5", "CT", "CG"],
       triggerMin: 6,
@@ -508,6 +537,8 @@ export const CASCADE_GAME: GameDefinition = {
   rtpTarget: 95.0,
   rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways · Cascade" },
+  payMechanic: "ways",
+  mechanics: ["cascade"],
   symbols: ["WILD", "H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -531,6 +562,8 @@ export const CASCADE_FG_GAME: GameDefinition = {
   volatilityTarget: "高（High）",
   rtpTarget: 95.0, rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways · Cascade + FG" },
+  payMechanic: "ways",
+  mechanics: ["cascade"],
   symbols: ["WILD", "SCAT", "H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -542,6 +575,7 @@ export const CASCADE_FG_GAME: GameDefinition = {
   scatter: { symbol: "SCAT", pays: { 3: 2, 4: 6, 5: 20 } },
   features: [{
     id: "freeCascade", type: "freeSpinsCascade", label: "連消免費遊戲",
+    category: "mode", taxonomyKey: "freeSpins",
     trigger: "盤面 3+ 散佈",
     desc: "贈免費局；免費局每局連消，全局倍率每次連消 +1（整輪不重置），3+ 散佈可再觸發。",
     params: { award: { 3: 8, 4: 12, 5: 20 }, startMult: 1, multStep: 1, retrigger: true },
@@ -559,6 +593,7 @@ export const STICKY_GAME: GameDefinition = {
   volatilityTarget: "中高（High-Med）",
   rtpTarget: 95.0, rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways · Sticky Wild" },
+  payMechanic: "ways",
   symbols: ["WILD", "SCAT", "H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -570,6 +605,7 @@ export const STICKY_GAME: GameDefinition = {
   scatter: { symbol: "SCAT", pays: { 3: 2, 4: 8, 5: 30 } },
   features: [{
     id: "sticky", type: "stickyWild", label: "黏性百搭重抽",
+    category: "mechanic", taxonomyKey: "stickyWild",
     trigger: "盤面 3+ 散佈",
     desc: "3+ 散佈觸發重抽；落下的 WILD 鎖定保留到結束（固定重抽次數，不歸位）。",
     params: { respins: 7 },
@@ -586,6 +622,7 @@ export const JACKPOT_GAME: GameDefinition = {
   volatilityTarget: "高（High，頭獎稀有）",
   rtpTarget: 95.0, rtpTolerance: 0.5,
   layout: { reels: 5, rows: 3, model: "243 ways · Jackpot" },
+  payMechanic: "ways",
   symbols: ["WILD", "JP", "H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   paying: ["H1", "H2", "H3", "L1", "L2", "L3", "L4"],
   wild: "WILD",
@@ -597,6 +634,7 @@ export const JACKPOT_GAME: GameDefinition = {
   scatter: { symbol: "SCAT", pays: {} },
   features: [{
     id: "jp", type: "jackpot", label: "漸進式頭獎",
+    category: "mode", taxonomyKey: "jackpot",
     trigger: "盤面 3+ JP 符號", triggerSymbol: "JP", triggerMin: 3,
     desc: "3+ JP 觸發頭獎輪盤，依權重抽 mini(20) / minor(50) / major(200) / grand(1000)×押注。註：固定面額代表平均派彩；真實成長式 pot 需跨局狀態。",
     params: { tiers: [{ value: 20, weight: 60 }, { value: 50, weight: 30 }, { value: 200, weight: 9 }, { value: 1000, weight: 1 }] },
