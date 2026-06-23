@@ -14,10 +14,16 @@
   55% { transform: translateY(2.5%); }
   100% { transform: translateY(0); }
 }
-/* 掉落模式：符號由「格子上方」滑入（在格子裡 overflow:hidden 內被裁切 → 看得到從上掉下來），
-   不淡入。最後略微 overshoot 再回正。 */
-@keyframes reel-drop {
-  0% { transform: translateY(-115%); }
-  68% { transform: translateY(8%); }
+/* 掉落模式 — 以「整欄」為裁切單位（欄容器 overflow:hidden，內層整疊位移）。
+   舊盤整體往下加速掉出畫面（落體感）。 */
+@keyframes board-drop-out {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(125%); }
+}
+/* 新盤整疊從盤面頂端上方掉入；末段略 overshoot 再回正（落定回彈）。
+   起點 -125% 代表整欄高度之上，所以最底列的符號也是「從最上方一路掉下來」。 */
+@keyframes board-drop-in {
+  0% { transform: translateY(-125%); }
+  84% { transform: translateY(3%); }
   100% { transform: translateY(0); }
 }

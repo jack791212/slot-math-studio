@@ -27,6 +27,8 @@ const TIMING = {
   SPINUP: 120, REEL_STOP_GAP: 110, REEL_SETTLE: 160, ANTICIPATION: 800,
   WIN_REVEAL: 450, WIN_MISS: 160, WIN_HOLD: 650, TIER_HOLD: 900,
   REFILL: 240, SPIN_GAP: 380, RESPIN_GAP: 460, BONUS_PAUSE: 650, JACKPOT_REVEAL: 900,
+  // drop 揭示：舊盤往下掉出 → 淨空空檔 → 新盤自頂逐欄掉入。
+  DROP_OUT: 220, DROP_GAP: 150, DROP_IN: 300, DROP_STAGGER: 55,
 };
 const TURBO_FACTOR = 0.32;
 
@@ -63,6 +65,11 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
   const [spinningCols, setSpinningCols] = useState<Set<number>>(new Set());
   const [anticip, setAnticip] = useState<Set<number>>(new Set());
   const [reelMode, setReelMode] = useState<ReelMode>(() => defaultReelMode(game));
+  const reelModeRef = useRef(reelMode);
+  useEffect(() => { reelModeRef.current = reelMode; }, [reelMode]);
+  // drop 揭示階段：out=舊盤掉出 / gap=淨空 / in=新盤自頂掉入 / null=靜態。dropKey 每次揭示遞增 → 強制動畫重播。
+  const [dropPhase, setDropPhase] = useState<"out" | "gap" | "in" | null>(null);
+  const [dropKey, setDropKey] = useState(0);
   const reelStripsRef = useRef<string[][][]>([]); // [reel][row] → 該格捲動帶
   // turbo / 流程版本（取代 clearTimers）
   const [turbo, setTurbo] = useState(false);
@@ -84,6 +91,7 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
   const resetVisual = useCallback(() => {
     setFg(null); setHs(null); setCas(null); setFc(null); setSw(null); setJp(null);
     setTier(null); setWinCells(new Set()); setSpinningCols(new Set()); setAnticip(new Set()); setLandedCols(reels);
+    setDropPhase(null);
   }, [reels]);
 
   // 換遊戲：中止進行中的動畫、清狀態、重抽新盤面。
@@ -151,6 +159,30 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
     return true;
   }, [reels, rows, computeAnticipation]);
 
+  // 掉落揭示：舊盤整體往下掉出畫面 → 淨空空檔 → 新盤自盤面頂端逐欄掉入。
+  // 用 sleepHold（地板 0.4）讓掉落動畫即使在 turbo 也看得見，且等待長度與 CSS 動畫一致。
+  const revealDrop = useCallback(async (b: Board, ctx: RunCtx, withAnticip = true): Promise<boolean> => {
+    const { alive, sleepHold } = ctx;
+    const ant = withAnticip ? computeAnticipation(b) : new Set<number>();
+    setAnticip(ant);
+    // 1) 舊盤往下掉出（沿用目前 board 內容）
+    setDropPhase("out"); setDropKey((k) => k + 1);
+    await sleepHold(TIMING.DROP_OUT); if (!alive()) return false;
+    // 2) 淨空空檔
+    setDropPhase("gap");
+    await sleepHold(TIMING.DROP_GAP); if (!alive()) return false;
+    // 3) 換上新盤、自頂逐欄掉入
+    setBoard(b.map((c) => c.slice())); setDropPhase("in"); setDropKey((k) => k + 1);
+    await sleepHold(TIMING.DROP_IN + (reels - 1) * TIMING.DROP_STAGGER); if (!alive()) return false;
+    setDropPhase(null);
+    return true;
+  }, [reels, computeAnticipation]);
+
+  // 揭示分派：drop 模式走整盤掉落，其餘走逐欄滾輪緩停。讀 ref 以免隨 reelMode 重建。
+  const reveal = useCallback((b: Board, ctx: RunCtx, withAnticip = true): Promise<boolean> =>
+    reelModeRef.current === "drop" ? revealDrop(b, ctx, withAnticip) : revealReels(b, ctx, withAnticip),
+  [revealReels, revealDrop]);
+
   // ---- 免費遊戲（每局真的轉輪 → 命中停久、空轉快速帶過）----
   const runFG = useCallback(async (startSpins: number, ctx: RunCtx) => {
     if (!fgFeat) { setSpinning(false); return; }
@@ -161,7 +193,7 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
     while (remaining > 0 && guard < 400 && alive()) {
       guard++; remaining--;
       const b = drawBoard(samplerRef.current, game);
-      if (!(await revealReels(b, ctx, true))) return;
+      if (!(await reveal(b, ctx, true))) return;
       const det = evalDetailed(b, game); const sc = countScatter(b, game);
       let w = det.win * p.multiplier;
       if (sc >= 3) { w += (game.scatter.pays[Math.min(sc, 5)] || 0) * p.multiplier; if (p.retrigger) remaining += p.award[Math.min(sc, 5)]; }
@@ -174,7 +206,7 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
     setFg((f) => (f ? { ...f, done: true, total } : f));
     await sleepHold(TIMING.TIER_HOLD); if (!alive()) return;
     setSpinning(false);
-  }, [fgFeat, game, revealReels]);
+  }, [fgFeat, game, reveal]);
 
   // ---- Hold & Spin（接近填滿時放慢、填滿前懸念）----
   const runHoldSpin = useCallback(async (initial: Coin[], { alive, sleep, sleepHold }: RunCtx) => {
@@ -236,7 +268,7 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
     while (remaining > 0 && guard < 600 && alive()) {
       guard++; remaining--;
       const b = drawBoard(samplerRef.current, game);
-      if (!(await revealReels(b, ctx, true))) return;
+      if (!(await reveal(b, ctx, true))) return;
       setFc({ remaining, mult: gm, total, spinsTotal: startSpins });
       while (alive()) {
         const det = evalDetailed(b, game);
@@ -256,7 +288,7 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
     setBalance((x) => x + total); setLastWin(total); setTier(winTier(total / BET));
     await sleepHold(TIMING.TIER_HOLD); if (!alive()) return;
     setSpinning(false);
-  }, [game, revealReels]);
+  }, [game, reveal]);
 
   // ---- 黏性百搭（固定重抽、wild 累積）----
   const runSticky = useCallback(async (feature: FeatureDef, { alive, sleep, sleepHold }: RunCtx) => {
@@ -330,11 +362,11 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
   const playBoard = useCallback(async (b: Board) => {
     const ctx = makeRun();
     resetVisual(); setLastWin(0); setSpinning(true); setBalance((x) => x - BET);
-    if (!(await revealReels(b, ctx, true))) return;
+    if (!(await reveal(b, ctx, true))) return;
     const det = evalDetailed(b, game); const sc = countScatter(b, game);
     await ctx.sleepHold(det.win > 0 || sc >= 3 ? TIMING.WIN_REVEAL : TIMING.WIN_MISS); if (!ctx.alive()) return;
     await finish(b, ctx);
-  }, [makeRun, resetVisual, revealReels, game, finish]);
+  }, [makeRun, resetVisual, reveal, game, finish]);
 
   const spin = useCallback(() => { if (spinning) return; void playBoard(drawBoard(samplerRef.current, game)); }, [spinning, playBoard, game]);
 
@@ -374,6 +406,11 @@ export function PlayPanel({ game }: { game: GameDefinition }) {
         reelStrip={(c, r = 0) => reelStripsRef.current[c]?.[r] ?? []}
         settleMs={Math.round(TIMING.REEL_SETTLE * Math.max(speedRef.current, 0.4))}
         reelMode={reelMode}
+        dropPhase={dropPhase}
+        dropKey={dropKey}
+        dropOutMs={Math.round(TIMING.DROP_OUT * Math.max(speedRef.current, 0.4))}
+        dropInMs={Math.round(TIMING.DROP_IN * Math.max(speedRef.current, 0.4))}
+        dropStaggerMs={Math.round(TIMING.DROP_STAGGER * Math.max(speedRef.current, 0.4))}
         renderCell={(c, r) => {
           if (hs) {
             const coin = hs.coins.find((k) => k.c === c && k.r === r);

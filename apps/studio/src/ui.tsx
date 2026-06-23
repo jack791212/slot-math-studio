@@ -33,7 +33,12 @@ function ReelStripCol({ syms, blur, anticip }: { syms: string[]; blur: number; a
   );
 }
 
-export function GameStage({ reels, rows, renderCell, overlay, revealCols, gap = "2.2%", spinningCols, landedCols, anticipationCols, reelStrip, settleMs = 160, reelMode = "strip" }: {
+/** drop 揭示「空檔」階段的淨空格：盤面在舊圖掉出、新圖掉入之間短暫淨空。 */
+function DropBlank() {
+  return <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 6, background: C.panel2, opacity: 0.16 }} />;
+}
+
+export function GameStage({ reels, rows, renderCell, overlay, revealCols, gap = "2.2%", spinningCols, landedCols, anticipationCols, reelStrip, settleMs = 160, reelMode = "strip", dropPhase = null, dropKey = 0, dropOutMs = 220, dropInMs = 300, dropStaggerMs = 55 }: {
   reels: number;
   rows: number;
   renderCell: (c: number, r: number) => React.ReactNode;
@@ -46,6 +51,11 @@ export function GameStage({ reels, rows, renderCell, overlay, revealCols, gap = 
   reelStrip?: (c: number, r?: number) => string[]; // 捲動帶符號（cell 模式給每格不同）
   settleMs?: number;                     // 落定回彈時長（已吃 speed factor）
   reelMode?: ReelMode;                   // strip=整欄一條 / cell=每格獨立 / drop=掉落
+  dropPhase?: "out" | "gap" | "in" | null; // drop 揭示階段：舊盤掉出 / 空檔 / 新盤掉入 / 靜態
+  dropKey?: number;                      // 每次揭示遞增 → 強制動畫重播（remount）
+  dropOutMs?: number;                    // 掉出時長（已吃 speed factor）
+  dropInMs?: number;                     // 掉入時長（已吃 speed factor）
+  dropStaggerMs?: number;                // 掉入逐欄延遲（已吃 speed factor）
 }) {
   const wide = reels / rows >= 16 / 9; // 盤面比 16:9 寬 → 撐滿寬度；否則撐滿高度
   const landed = landedCols ?? revealCols ?? reels;
@@ -58,6 +68,27 @@ export function GameStage({ reels, rows, renderCell, overlay, revealCols, gap = 
           const anticip = anticipationCols?.has(c) ?? false;
           const glow = anticip ? { boxShadow: `0 0 0 2px ${C.gold}, 0 0 22px ${C.gold}99`, transform: "scale(1.02)" } : null;
 
+          // 掉落模式：整欄為裁切單位，符號自盤面頂端「整疊」掉入、舊盤整疊往下掉出。
+          // out=舊盤掉出 / gap=空檔（盤面淨空） / in=新盤自頂掉入（逐欄延遲）/ null=靜態顯示。
+          if (reelMode === "drop") {
+            const delay = dropPhase === "in" ? c * dropStaggerMs : 0;
+            const anim = dropPhase === "out"
+              ? `board-drop-out ${dropOutMs}ms cubic-bezier(.5,.05,.9,.35) both`
+              : dropPhase === "in"
+                ? `board-drop-in ${dropInMs}ms cubic-bezier(.25,.7,.4,1) ${delay}ms both`
+                : undefined; // gap / null：不位移
+            const blank = dropPhase === "gap";
+            return (
+              <div key={"d" + c} style={{ overflow: "hidden", borderRadius: 8, ...(dropPhase === "in" ? glow : null) }}>
+                <div key={dropPhase === null ? "static" : `${dropPhase}-${dropKey}`} style={{ display: "grid", gridTemplateRows: `repeat(${rows}, 1fr)`, gap, height: "100%", animation: anim, willChange: "transform" }}>
+                  {Array.from({ length: rows }).map((_, r) => (
+                    <div key={r} style={{ minHeight: 0, minWidth: 0 }}>{blank ? <DropBlank /> : renderCell(c, r)}</div>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+
           if (spinningCols?.has(c)) {
             if (reelMode === "strip") {
               return (
@@ -66,41 +97,30 @@ export function GameStage({ reels, rows, renderCell, overlay, revealCols, gap = 
                 </div>
               );
             }
-            if (reelMode === "cell") {
-              // 每格獨立小輪帶：用「width:100% + aspectRatio:1」的方框（與靜態 Tile 同尺寸），
-              // 避免 1fr 列 + overflow 造成高度塌掉。
-              return (
-                <div key={"s" + c} style={{ display: "grid", gridTemplateRows: `repeat(${rows}, 1fr)`, gap, ...glow }}>
-                  {Array.from({ length: rows }).map((_, r) => (
-                    <div key={r} style={{ minHeight: 0, minWidth: 0 }}>
-                      <div style={{ width: "100%", aspectRatio: "1 / 1", overflow: "hidden", borderRadius: 6 }}>
-                        <ReelStripCol syms={strip(c, r)} blur={anticip ? 0.8 : 1.3} anticip={anticip} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-            // drop 模式轉動期：暗格佔位（真正動作在落定時掉入）
+            // cell 模式轉動期：每格獨立小輪帶。用「width:100% + aspectRatio:1」的方框（與靜態 Tile
+            // 同尺寸），避免 1fr 列 + overflow 造成高度塌掉。（drop 模式已於上方提前處理。）
             return (
-              <div key={"s" + c} style={{ display: "grid", gridTemplateRows: `repeat(${rows}, 1fr)`, gap, opacity: 0.3, ...glow }}>
-                {Array.from({ length: rows }).map((_, r) => <div key={r} style={{ background: C.panel2, borderRadius: 6 }} />)}
+              <div key={"s" + c} style={{ display: "grid", gridTemplateRows: `repeat(${rows}, 1fr)`, gap, ...glow }}>
+                {Array.from({ length: rows }).map((_, r) => (
+                  <div key={r} style={{ minHeight: 0, minWidth: 0 }}>
+                    <div style={{ width: "100%", aspectRatio: "1 / 1", overflow: "hidden", borderRadius: 6 }}>
+                      <ReelStripCol syms={strip(c, r)} blur={anticip ? 0.8 : 1.3} anticip={anticip} />
+                    </div>
+                  </div>
+                ))}
               </div>
             );
           }
 
           const shown = c < landed;
-          // cell / drop 模式：落定在「每一格自己的方框內」進行（停輪、回彈、掉落都在格子裡，
-          // 與轉動中的單格輪帶同尺寸方框，不會用整欄挪移或其他圖蓋下來）。
-          if (spinMode && shown && (reelMode === "cell" || reelMode === "drop")) {
+          // cell 模式：落定在「每一格自己的方框內」回彈（停輪手感都在格子裡）。
+          if (spinMode && shown && reelMode === "cell") {
             return (
               <div key={"l" + c} style={{ display: "grid", gridTemplateRows: `repeat(${rows}, 1fr)`, gap }}>
                 {Array.from({ length: rows }).map((_, r) => (
                   <div key={r} style={{ minHeight: 0, minWidth: 0 }}>
                     <div style={{ width: "100%", aspectRatio: "1 / 1", overflow: "hidden", borderRadius: 6 }}>
-                      <div style={{ animation: reelMode === "drop"
-                        ? `reel-drop ${Math.round(settleMs * 1.8)}ms cubic-bezier(.34,.65,.4,1) ${r * 55}ms both`
-                        : `reel-settle ${settleMs}ms ease-out` }}>
+                      <div style={{ animation: `reel-settle ${settleMs}ms ease-out` }}>
                         {renderCell(c, r)}
                       </div>
                     </div>
