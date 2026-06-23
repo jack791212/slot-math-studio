@@ -1,0 +1,16 @@
+{
+  "name": "slot-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r test",
+    "test:engine": "pnpm -F @slot/engine test",
+    "dev": "pnpm -F @slot/studio dev",
+    "build": "pnpm -F @slot/studio build"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

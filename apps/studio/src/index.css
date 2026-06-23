@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 滾輪轉動帶：向「下」捲動（真實老虎機方向，符號由上往下落）。
+   strip 由 -50% 移到 0，配合下方複製組無縫銜接。 */
+@keyframes reel-roll {
+  from { transform: translateY(-50%); }
+  to { transform: translateY(0); }
+}
+/* 落定回彈（緩停手感：由上方掉入、先 overshoot 再回正）。 */
+@keyframes reel-settle {
+  0% { transform: translateY(-7%); }
+  55% { transform: translateY(2.5%); }
+  100% { transform: translateY(0); }
+}
+/* 掉落模式：符號由「格子上方」滑入（在格子裡 overflow:hidden 內被裁切 → 看得到從上掉下來），
+   不淡入。最後略微 overshoot 再回正。 */
+@keyframes reel-drop {
+  0% { transform: translateY(-115%); }
+  68% { transform: translateY(8%); }
+  100% { transform: translateY(0); }
+}
